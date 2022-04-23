@@ -1,0 +1,121 @@
+import numpy as np
+import pandas as pd
+import random
+import lifelines
+import lifelines.utils
+
+
+def selectFeaturesUsingSFFS(dataFm, colEvent='event', colTime='time', numOfSFFSFeature=5, seed=6691):
+    indicesFailure = dataFm.loc[dataFm[colEvent]==1].index.to_list()
+    indicesCensor = dataFm.loc[dataFm[colEvent]==0].index.to_list()
+    random.seed(seed)
+    random.shuffle(indicesFailure)
+    random.shuffle(indicesCensor)
+    lenOfFailureStep = len(indicesFailure)//5
+    lenOfCensorStep = len(indicesCensor)//5
+
+    def runCriterionStep(dataFm, cols):
+        if len(cols) == 0:
+            return 0.
+        dataFm = dataFm.loc[:, [colEvent, colTime]+cols]
+        cox = lifelines.CoxPHFitter(penalizer=0.01)
+        cox.fit(dataFm, colTime, colEvent, step_size=0.2)
+        partialHazard = cox.predict_partial_hazard(dataFm)
+        cIndex = lifelines.utils.concordance_index(dataFm[colTime], -partialHazard, dataFm[colEvent])
+        #print(cols, cIndex)
+        return  cIndex
+
+    def runCriterionStepWithCrossValidation(dataFm, cols):
+        if len(cols) == 0:
+            return 0.
+
+        cIndexes = []
+        firstIxOfFailure, firstIxOfCensor = 0, 0
+        lastIxOfFailure, lastIxOfCensor = firstIxOfFailure+lenOfFailureStep, firstIxOfCensor+lenOfCensorStep
+        for i in range(5):
+            validIndices = indicesFailure[firstIxOfFailure:lastIxOfFailure] + indicesCensor[firstIxOfCensor:lastIxOfCensor]
+            trainIndices = list(set(indicesCensor+indicesFailure) - set(validIndices) )
+
+            validDataFm = dataFm.loc[validIndices, [colEvent, colTime]+cols]
+            trainDataFm = dataFm.loc[trainIndices, [colEvent, colTime]+cols]
+            cox = lifelines.CoxPHFitter(penalizer=0.01)
+            #print(pd.isna(trainDataFm))
+            cox.fit(trainDataFm, colTime, colEvent, step_size=0.1)
+            #print(validDataFm.index.to_list())
+            #print(validDataFm.columns.to_list())
+            partialHazard = cox.predict_partial_hazard(validDataFm)
+            cIndex = lifelines.utils.concordance_index(validDataFm[colTime], -partialHazard, validDataFm[colEvent])
+            cIndexes.append(cIndex)
+
+            firstIxOfFailure, firstIxOfCensor = lastIxOfFailure, lastIxOfCensor
+            lastIxOfFailure, lastIxOfCensor = [firstIxOfFailure+lenOfFailureStep, firstIxOfCensor+lenOfCensorStep] if i < 4 else [len(indicesFailure), len(indicesCensor)]
+
+        #cIndexes.remove(max(cIndexes))
+        #cIndexes.remove(min(cIndexes))
+        return  np.mean(cIndexes)#-np.std(cIndexes)
+
+    def runSFSStep(dataFm, colsSelectedBefore, colsAll):
+        #print('------sfs------')
+        colsToSelect = [col for col in colsAll if col not in colsSelectedBefore]
+        colsSelectedNow = []
+        scoresOfColsSelected = []
+        for col in colsToSelect:
+            curCols = colsSelectedBefore.copy()
+            curCols.append(col)
+            curScore = runCriterionStepWithCrossValidation(dataFm, curCols)
+            colsSelectedNow.append(curCols)
+            scoresOfColsSelected.append(curScore)
+
+        return colsSelectedNow[int(np.argmax(scoresOfColsSelected))], np.max(scoresOfColsSelected)
+
+    def runSBSStep(dataFm, colsSelectedBefore):
+        #print('------sbs------')
+        colsSelectedNow = []
+        scoresOfColsSelected = []
+        for col in colsSelectedBefore:
+            curCols = colsSelectedBefore.copy()
+            curCols.remove(col)
+            curScore = runCriterionStepWithCrossValidation(dataFm, curCols)
+            colsSelectedNow.append(curCols)
+            scoresOfColsSelected.append(curScore)
+
+        return colsSelectedNow[int(np.argmax(scoresOfColsSelected))], np.max(scoresOfColsSelected)
+
+    colsAll = dataFm.columns.to_list()
+    colsAll.remove(colEvent)
+    colsAll.remove(colTime)
+    numOfSFFSFeature = numOfSFFSFeature if len(colsAll) > numOfSFFSFeature else len(colsAll)
+
+    finished = False
+    colsSelectedNow = []
+    bestScore = 0.
+    bestCols = []
+    while not finished:
+        colsSelectedAfSFS, scoreOfColsSelectedAfSFS = runSFSStep(dataFm, colsSelectedNow, colsAll)
+        #print(f'after sfs: {colsSelectedAfSFS}, score: {scoreOfColsSelectedAfSFS:.4f}')
+        #print(f'SFS best:{bestScore}, cur:{scoreOfColsSelectedAfSFS}')
+        if len(colsSelectedAfSFS) == 0:
+            #bestScore = scoreOfColsSelectedAfSFS
+            bestCols = colsSelectedAfSFS
+        if scoreOfColsSelectedAfSFS > bestScore and len(colsSelectedAfSFS)>0:
+            bestScore = scoreOfColsSelectedAfSFS
+            bestCols = colsSelectedAfSFS #if len(colsSelectedAfSFS) == 5 else bestCols
+
+            #print(f'best sfs: {colsSelectedAfSFS}, score: {scoreOfColsSelectedAfSFS:.4f}')
+        colsSelectedNow = colsSelectedAfSFS
+        sbsFinished = False
+        while not sbsFinished:
+            colsSelectedAfSBS, scoreOfColsSelectedAfSBS = runSBSStep(dataFm, colsSelectedNow)
+            #print(f'SBS best:{bestScore}, cur:{scoreOfColsSelectedAfSBS}')
+            if scoreOfColsSelectedAfSBS > bestScore and len(colsSelectedAfSBS)>0:
+                bestScore = scoreOfColsSelectedAfSBS
+                bestCols = colsSelectedAfSBS  #if len(colsSelectedAfSBS) == 5 else bestCols
+                #print(f'after sbs and best: {colsSelectedAfSBS}, score: {scoreOfColsSelectedAfSBS}')
+                colsSelectedNow = colsSelectedAfSBS
+            else:
+                sbsFinished = True
+
+        if len(colsSelectedNow) == numOfSFFSFeature:
+            finished = True
+
+    return bestCols
