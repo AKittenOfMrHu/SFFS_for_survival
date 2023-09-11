@@ -1,0 +1,236 @@
+from __future__ import absolute_import
+
+import pandas as pd
+import numpy as np
+import radiomics
+import SimpleITK as sitk
+from utils.nrrdDatasets import OvarianDatasets
+
+
+class FeatureExtractor(object):
+    """
+    Extract ROI feature from original dicom file and annotation nrrd files.
+    Impliment on pyradiomics 2.2.0 and SimpleITK 1.2.3
+
+    Parameters
+    ----------------------------
+    img_sitk: The original image, SimpleITK format.
+    ann_sitk: The mask nrrd image, SimpleITK format.
+
+    Return
+    ----------------------------
+    features: Pandas Series of gray-level features. 104 features in total.
+    """
+    def __init__(self, image_sitk, ann_sitk):
+        super().__init__()
+        self.image = image_sitk
+
+        labelarray = sitk.GetArrayFromImage(ann_sitk)
+        labelarray[labelarray > 0] = 1.0
+        self.mask = sitk.GetImageFromArray(labelarray)
+        self.mask.CopyInformation(ann_sitk)
+
+    #@property
+    def get_features(self):
+        Features = pd.concat([self.getFirstOrderFeature(),
+                              self.getGLCM(),
+                              self.getGLDM(),
+                              self.getGLRLM(),
+                              self.getGLSZM(),
+                              self.getNGTDM(),
+                              self.getShape()
+                              ])
+        return Features
+
+    def get_features_of_wavelet(self):
+        Features = pd.concat([self.getFirstOrderFeature(),
+                              self.getGLCM(),
+                              self.getGLDM(),
+                              self.getGLRLM(),
+                              self.getGLSZM(),
+                              self.getNGTDM()
+                              ])
+        return Features
+
+    def getFirstOrderFeature(self):
+        # feature number: 19
+        # Use radiomics package to extract first order features from image and masks
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        fo = radiomics.firstorder.RadiomicsFirstOrder(self.image, self.mask)
+        fo._initCalculation()
+        fo_feature = {'Energy': fo.getEnergyFeatureValue().item(),
+                        'Total Energy': fo.getTotalEnergyFeatureValue().item(),
+                        'Entropy': fo.getEntropyFeatureValue().item(),
+                        'Minimum': fo.getMinimumFeatureValue().item(),
+                        '10th percentile': fo.get10PercentileFeatureValue().item(),
+                        '90th percentile': fo.get90PercentileFeatureValue().item(),
+                        'Maximum': fo.getMaximumFeatureValue().item(),
+                        'Mean': fo.getMeanFeatureValue().item(),
+                        'Median': fo.getMedianFeatureValue().item(),
+                        'Interquartile Range': fo.getInterquartileRangeFeatureValue().item(),
+                        'Range': fo.getRangeFeatureValue().item(),
+                        'Mean Absolute Deviation (MAD)': fo.getMeanAbsoluteDeviationFeatureValue().item(),
+                        'Robust Mean Absolute Deviation (rMAD)': fo.getRobustMeanAbsoluteDeviationFeatureValue().item(),
+                        'Root Mean Squared (RMS)': fo.getRootMeanSquaredFeatureValue().item(),
+                        'Standard Deviation': fo.getStandardDeviationFeatureValue().item(),
+                        'Skewness': fo.getSkewnessFeatureValue().item(),
+                        'Kurtosis': fo.getKurtosisFeatureValue().item(),
+                        'Variance': fo.getVarianceFeatureValue().item(),
+                        'Uniformity': fo.getUniformityFeatureValue().item()}
+        return pd.Series(fo_feature)
+
+    def getShape(self):
+        # feature number: 14
+        # Use radiomics package to extract shape features from image and masks
+        shape = radiomics.shape.RadiomicsShape(self.image, self.mask, force2D=True)
+        shape._initCalculation()
+        shape_feature= {'Mesh Volume': shape.getMeshVolumeFeatureValue(),
+                        'Voxel Volume': shape.getVoxelVolumeFeatureValue().item(),
+                        'Surface Area': shape.getSurfaceAreaFeatureValue(),
+                        'Surface Area to Volume ratio': shape.getSurfaceVolumeRatioFeatureValue(),
+                        'Sphericity': shape.getSphericityFeatureValue(),
+                        'Compactness 1': shape.getCompactness1FeatureValue().item(),
+                        'Compactness 2': shape.getCompactness2FeatureValue(),
+                        'Spherical Disproportion': shape.getSphericalDisproportionFeatureValue(),
+                        'Maximum 3D diameter': shape.getMaximum3DDiameterFeatureValue(),
+                        'Major Axis Length': shape.getMajorAxisLengthFeatureValue().item(),
+                        'Minor Axis Length': shape.getMinorAxisLengthFeatureValue().item(),
+                        'Least Axis Length': shape.getLeastAxisLengthFeatureValue().item(),
+                        'Elongation': shape.getElongationFeatureValue().item(),
+                        'Flatness': shape.getFlatnessFeatureValue().item()
+                        }
+        return pd.Series(shape_feature)
+
+    def getShape2d(self):
+        # feature number: 10
+        # Use radiomics package to extract shape features from image and masks
+        shape = radiomics.shape2D.RadiomicsShape2D(self.image, self.mask, force2D=True)
+        shape._initCalculation()
+        shape_feature= {'Mesh Surface': shape.getMeshSurfaceFeatureValue().item(),
+                        'Pixel Surface': shape.getPixelSurfaceFeatureValue().item(),
+                        'Perimeter': shape.getPerimeterFeatureValue().item(),
+                        'Perimeter to Surface ratio': shape.getPerimeterSurfaceRatioFeatureValue().item(),
+                        'Sphericity': shape.getSphericityFeatureValue().item(),
+                        'Spherical Disproportion': shape.getSphericalDisproportionFeatureValue().item(),
+                        'Maximum 2D diameter': shape.getMaximumDiameterFeatureValue().item(),
+                        'Major Axis Length': shape.getMajorAxisLengthFeatureValue().item(),
+                        'Minor Axis Length': shape.getMinorAxisLengthFeatureValue().item(),
+                        'Elongation': shape.getElongationFeatureValue().item()}
+        return pd.Series(shape_feature)
+
+    def getGLCM(self):
+        # feature number: 24 - 1
+        # Use radiomics package to extract GLCM features from image and masks
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        glcm = radiomics.glcm.RadiomicsGLCM(self.image, self.mask)
+        glcm._initCalculation()
+        glcm_feature = {'Autocorrelation': glcm.getAutocorrelationFeatureValue().item(),
+                        'Joint Average': glcm.getJointAverageFeatureValue().item(),
+                        'Cluster Prominence': glcm.getClusterProminenceFeatureValue().item(),
+                        'Cluster Shade': glcm.getClusterShadeFeatureValue().item(),
+                        'Cluster Tendency': glcm.getClusterTendencyFeatureValue().item(),
+                        'Contrast': glcm.getContrastFeatureValue().item(),
+                        'Correlation': glcm.getCorrelationFeatureValue().item(),
+                        'Difference Average': glcm.getDifferenceAverageFeatureValue().item(),
+                        'Difference Entropy': glcm.getDifferenceEntropyFeatureValue().item(),
+                        'Difference Variance': glcm.getDifferenceVarianceFeatureValue().item(),
+                        'Joint Energy': glcm.getJointEnergyFeatureValue().item(),
+                        'Joint Entropy': glcm.getJointEntropyFeatureValue().item(),
+                        'Informational Measure of Correlation (IMC) 1': glcm.getImc1FeatureValue().item(),
+                        'Informational Measure of Correlation (IMC) 2': glcm.getImc2FeatureValue().item(),
+                        'Inverse Difference Moment (IDM)': glcm.getIdmFeatureValue().item(),
+                        #'Maximal Correlation Coefficient (MCC)': glcm.getMCCFeatureValue(),
+                        'Inverse Difference Moment Normalized (IDMN)': glcm.getIdmnFeatureValue().item(),
+                        'Inverse Difference (ID)': glcm.getIdFeatureValue().item(),
+                        'Inverse Difference Normalized (IDN)': glcm.getIdnFeatureValue().item(),
+                        'Inverse Variance': glcm.getInverseVarianceFeatureValue().item(),
+                        'Maximum Probability': glcm.getMaximumProbabilityFeatureValue().item(),
+                        'Sum Average': glcm.getSumAverageFeatureValue().item(),
+                        'Sum Entropy': glcm.getSumEntropyFeatureValue().item(),
+                        'Sum of Squares': glcm.getSumSquaresFeatureValue().item()}
+        return pd.Series(glcm_feature)
+
+    def getGLSZM(self):
+        # feature number: 16
+        # Use radiomics package to extract GLZSM features from image and masks.
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        glszm = radiomics.glszm.RadiomicsGLSZM(self.image, self.mask)
+        glszm._initCalculation()
+        glszm_feature= {'Small Area Emphasis (SAE)': glszm.getSmallAreaEmphasisFeatureValue().item(),
+                        'Large Area Emphasis (LAE)': glszm.getLargeAreaEmphasisFeatureValue().item(),
+                        'Gray Level Non-Uniformity (GLN)': glszm.getGrayLevelNonUniformityFeatureValue().item(),
+                        'Gray Level Non-Uniformity Normalized (GLNN)': glszm.getGrayLevelNonUniformityNormalizedFeatureValue().item(),
+                        'Size-Zone Non-Uniformity (SZN)': glszm.getSizeZoneNonUniformityFeatureValue().item(),
+                        'Size-Zone Non-Uniformity Normalized (SZNN)': glszm.getSizeZoneNonUniformityNormalizedFeatureValue().item(),
+                        'Zone Percentage (ZP)': glszm.getZonePercentageFeatureValue().item(),
+                        'Gray Level Variance (GLV)': glszm.getGrayLevelVarianceFeatureValue().item(),
+                        'Zone Variance (ZV)': glszm.getZoneVarianceFeatureValue().item(),
+                        'Zone Entropy (ZE)': glszm.getZoneEntropyFeatureValue().item(),
+                        'Low Gray Level Zone Emphasis (LGLZE)': glszm.getLowGrayLevelZoneEmphasisFeatureValue().item(),
+                        'High Gray Level Zone Emphasis (HGLZE)': glszm.getHighGrayLevelZoneEmphasisFeatureValue().item(),
+                        'Small Area Low Gray Level Emphasis (SALGLE)': glszm.getSmallAreaLowGrayLevelEmphasisFeatureValue().item(),
+                        'Small Area High Gray Level Emphasis (SAHGLE)': glszm.getSmallAreaHighGrayLevelEmphasisFeatureValue().item(),
+                        'Large Area Low Gray Level Emphasis (LALGLE)': glszm.getLargeAreaLowGrayLevelEmphasisFeatureValue().item(),
+                        'Large Area High Gray Level Emphasis (LAHGLE)': glszm.getLargeAreaHighGrayLevelEmphasisFeatureValue().item()}
+        return pd.Series(glszm_feature)
+
+    def getGLRLM(self):
+        # feature number: 16
+        # Use radiomics package to extract GLRLM features from image and masks.
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        glrlm = radiomics.glrlm.RadiomicsGLRLM(self.image, self.mask)
+        glrlm._initCalculation()
+        glrlm_feature= {'Short Run Emphasis (SRE)': glrlm.getShortRunEmphasisFeatureValue().item(),
+                        'Long Run Emphasis (LRE)': glrlm.getLongRunEmphasisFeatureValue().item(),
+                        'Gray Level Non-Uniformity (GLN)': glrlm.getGrayLevelNonUniformityFeatureValue().item(),
+                        'Gray Level Non-Uniformity Normalized (GLNN)': glrlm.getGrayLevelNonUniformityNormalizedFeatureValue().item(),
+                        'Run Length Non-Uniformity (RLN)': glrlm.getRunLengthNonUniformityFeatureValue().item(),
+                        'Run Length Non-Uniformity Normalized (RLNN)': glrlm.getRunLengthNonUniformityNormalizedFeatureValue().item(),
+                        'Run Percentage (RP)': glrlm.getRunPercentageFeatureValue().item(),
+                        'Gray Level Variance (GLV)': glrlm.getGrayLevelVarianceFeatureValue().item(),
+                        'Run Variance (RV)': glrlm.getRunVarianceFeatureValue().item(),
+                        'Run Entropy (RE)': glrlm.getRunEntropyFeatureValue().item(),
+                        'Low Gray Level Run Emphasis (LGLRE)': glrlm.getLowGrayLevelRunEmphasisFeatureValue().item(),
+                        'High Gray Level Run Emphasis (HGLRE)': glrlm.getHighGrayLevelRunEmphasisFeatureValue().item(),
+                        'Short Run Low Gray Level Emphasis (SRLGLE)': glrlm.getShortRunLowGrayLevelEmphasisFeatureValue().item(),
+                        'Short Run High Gray Level Emphasis (SRHGLE)': glrlm.getShortRunHighGrayLevelEmphasisFeatureValue().item(),
+                        'Long Run Low Gray Level Emphasis (LRLGLE)': glrlm.getLongRunLowGrayLevelEmphasisFeatureValue().item(),
+                        'Long Run High Gray Level Emphasis (LRHGLE)': glrlm.getLongRunHighGrayLevelEmphasisFeatureValue().item()}
+        return pd.Series(glrlm_feature)
+
+    def getNGTDM(self):
+        # feature number: 5
+        # Use radiomics package to extract NGTDM features from image and masks.
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        ngtdm = radiomics.ngtdm.RadiomicsNGTDM(self.image, self.mask)
+        ngtdm._initCalculation()
+        ngtdm_feature= {'coarseness': ngtdm.getCoarsenessFeatureValue().item(),
+                        'contrast': ngtdm.getContrastFeatureValue().item(),
+                        'busyness': ngtdm.getBusynessFeatureValue().item(),
+                        'complexity': ngtdm.getComplexityFeatureValue().item(),
+                        'strength': ngtdm.getStrengthFeatureValue().item()}
+        return pd.Series(ngtdm_feature)
+
+    def getGLDM(self):
+        # feature number: 14
+        # Use radiomics package to extract GLDM features from image and masks.
+        # The output is a size 1 ndarray, use ndarray.item() to convert to float.
+        gldm = radiomics.gldm.RadiomicsGLDM(self.image, self.mask)
+        gldm._initCalculation()
+        gldm_feature = {'Small Dependence Emphasis (SDE)': gldm.getSmallDependenceEmphasisFeatureValue().item(),
+                        'Large Dependence Emphasis (LDE)': gldm.getLargeDependenceEmphasisFeatureValue().item(),
+                        'Gray Level Non-Uniformity (GLN)': gldm.getGrayLevelNonUniformityFeatureValue().item(),
+                        'Dependence Non-Uniformity (DN)': gldm.getDependenceNonUniformityFeatureValue().item(),
+                        'Dependence Non-Uniformity Normalized (DNN)': gldm.getDependenceNonUniformityNormalizedFeatureValue().item(),
+                        'Gray Level Variance (GLV)': gldm.getGrayLevelVarianceFeatureValue().item(),
+                        'Dependence Variance (DV)': gldm.getDependenceVarianceFeatureValue().item(),
+                        'Dependence Entropy (DE)': gldm.getDependenceEntropyFeatureValue().item(),
+                        'Low Gray Level Emphasis (LGLE)': gldm.getLowGrayLevelEmphasisFeatureValue().item(),
+                        'High Gray Level Emphasis (HGLE)': gldm.getHighGrayLevelEmphasisFeatureValue().item(),
+                        'Small Dependence Low Gray Level Emphasis (SDLGLE)': gldm.getSmallDependenceLowGrayLevelEmphasisFeatureValue().item(),
+                        'Small Dependence High Gray Level Emphasis (SDHGLE)': gldm.getSmallDependenceHighGrayLevelEmphasisFeatureValue().item(),
+                        'Large Dependence Low Gray Level Emphasis (LDLGLE)': gldm.getLargeDependenceLowGrayLevelEmphasisFeatureValue().item(),
+                        'Large Dependence High Gray Level Emphasis (LDHGLE)': gldm.getLargeDependenceHighGrayLevelEmphasisFeatureValue().item()}
+        return pd.Series(gldm_feature)
+
+        
